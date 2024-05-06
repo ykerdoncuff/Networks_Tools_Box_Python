@@ -1,138 +1,101 @@
 #!/usr/bin/python3
-# Jimmy Taylor
+# Yann Kerdoncuff 
+# version d'apdatée de Jimmy Taylor
 # https://www.consentfactory.com/python-threading-queuing-netmiko/
 
-# This method will spin up threads and process IP addresses in a queue
+# Ce script utilise des threads pour traiter les adresses IP dans une file d'attente
 
-# Importing Netmiko modules
+# Import des modules Netmiko
 import time
 from unittest import result
 from netmiko import ConnectHandler
 
-
-# Additional modules imported for getting password, pretty print
+# Importation supplémentaire pour obtenir le mot de passe et l'impression formatée
 from getpass import getpass
 from pprint import pprint
-import signal,os
+import signal, os
 
-# Queuing and threading libraries
+# Import des bibliothèques de file d'attente et de threading
 from queue import Queue
 import threading
 
 import pandas as pd
 
+# Ces captures gèrent les erreurs liées à la frappe de Ctrl+C 
+# signal.signal(signal.SIGPIPE, signal.SIG_DFL)  # IOError : canal brisé
+# signal.signal(signal.SIGINT, signal.SIG_DFL)  # KeyboardInterrupt : Ctrl-C
 
-# These capture errors relating to hitting ctrl+C (I forget the source)
-#signal.signal(signal.SIGPIPE, signal.SIG_DFL)  # IOError: Broken pipe
-#signal.signal(signal.SIGINT, signal.SIG_DFL)  # KeyboardInterrupt: Ctrl-C
-
-
-# Switch IP addresses from text file that has one IP per line
-ip_adrrs_file = pd.read_csv('a4_list.csv')
-
+# Chargement des adresses IP à partir d'un fichier texte contenant une IP par ligne
+ip_adrrs_file = pd.read_csv('switch_list.csv')
 ip_addrs = ip_adrrs_file['IP'].to_list()
 
-
-# This sets up the queue
+# Configuration de la file d'attente
 enclosure_queue = Queue()
-# Set up thread lock so that only one thread prints at a time
+# Configuration du verrou de thread pour que seul un thread imprime à la fois
 print_lock = threading.Lock()
 
-# CLI command being sent. This could be anywhere (and even be a passed paramenter) 
-# but I put at the top for code readability
+# !! Commande CLI à envoyer !!
 command = "show time"
 
+# Fonction utilisée dans les threads pour se connecter aux appareils, en passant le numéro de thread et la file
+def deviceconnector(i, q):
 
-
-# Function used in threads to connect to devices, passing in the thread # and queue
-def deviceconnector(i,q):
-
-    # This while loop runs indefinitely and grabs IP addresses from the queue and processes them
-    # Loop will stop and restart if "ip = q.get()" is empty
+    # Cette boucle while s'exécute indéfiniment, récupère les adresses IP de la file et les traite
+    # La boucle s'arrête et redémarre si "ip = q.get()" est vide
     while True:
-        output=""
-        # These print statements are largely for the user indicating where the process is at
-        # and aren't required
-        print("{}: Waiting for IP address...".format(i))
+        output = ""
+        # Ces instructions print sont principalement pour l'utilisateur, indiquant où en est le processus
+        # et ne sont pas nécessaires
+        print(f"{i}: En attente d'adresse IP...")
         grab = q.get()
-        ip=ip_adrrs_file['IP'][i]
-        print("{}: Acquired IP: {}".format(i,ip))
+        ip = ip_adrrs_file['IP'][i]
+        print(f"{i}: IP acquise : {ip}")
         
-        #device
-        device_dict =  {
+        device_dict = {
             'host': str(ip),
             'username': 'USER',
             'password': 'PASSWORD',
-            'device_type': 'enterasys'
+            'device_type': 'cisco_ios'
         }
-
-        # Connect to the device, and print out auth or timeout errors
         try:
-            net_connect = ConnectHandler(**device_dict,auth_timeout=420)
-        
-        except ConnectionRefusedError:
+            net_connect = ConnectHandler(**device_dict)
+            output = net_connect.send_command(command, use_textfsm=True)
             with print_lock:
-                print("\n{}: ERROR: Connection to {} Refused.\n".format(i,ip))
-                output = "ERROR: Connection Refused"
-                ip_adrrs_file.loc[i, 'SSH Status'] = output
-            q.task_done()
-            continue
-        except TimeoutError:
-            with print_lock:
-                print("\n{}: ERROR: Connection to {} timed-out.\n".format(i,ip))
-                output = "ERROR: Connection timed-out"
-                ip_adrrs_file.loc[i, 'SSH Status'] = output
-            q.task_done()
-            continue
-        except Exception:
-            with print_lock:
-                print("\n{}: ERROR: Authenticaftion failed for {}.\n".format(i,ip))
-                output = "ERROR: Authenticaftion failed"
-                ip_adrrs_file.loc[i, 'SSH Status'] = output
-            q.task_done()
-            continue
-            
-        # Capture the output, and use TextFSM (in this case) to parse data
-        output = net_connect.send_command(command,use_textfsm=True)
-        
-        with print_lock:
-            print("{}: Printing output from {}".format(i,ip))
-            pprint(output)
-
-        # Disconnect from device
-        net_connect.disconnect
-        ip_adrrs_file.loc[i, 'SSH Status'] = "OK"
-
-        # Set the queue task as complete, thereby removing it from the queue indefinitely
+                print(f"{i}: Impression des résultats pour {ip}")
+                pprint(output)
+            net_connect.disconnect()
+            ip_adrrs_file.loc[i, 'SSH Status'] = "OK"
+        except Exception as e:
+            print(f"Erreur d'authentification pour {ip}.")
+            output = "ERREUR : Échec de l'authentification"
+            ip_adrrs_file.loc[i, 'SSH Status'] = output
         q.task_done()
 
-# Mail function that compiles the thread launcher and manages the queue
+# Fonction principale qui compile le lanceur de threads et gère la file
 def main():
 
     start = time.perf_counter()
-    # Setting up threads based on number set above
+    # Configuration des threads en fonction du nombre défini ci-dessus
     for i in range(len(ip_adrrs_file)):
-        # Create the thread using 'deviceconnector' as the function, passing in
-        # the thread number and queue object as parameters 
-        thread = threading.Thread(target=deviceconnector, args=(i,enclosure_queue,))
-        # Set the thread as a background daemon/job
+        # Création du thread en utilisant 'deviceconnector' comme fonction, en passant le numéro de thread et l'objet file comme paramètres
+        thread = threading.Thread(target=deviceconnector, args=(i, enclosure_queue,))
+        # Définition du thread comme un daemon/de fond
         thread.setDaemon(True)
-        # Start the thread
+        # Démarrage du thread
         thread.start()
 
-    # For each ip address in "ip_addrs", add that IP address to the queue
+    # Pour chaque adresse IP dans "ip_addrs", ajout de cette adresse IP dans la file
     for ip_addr in ip_addrs:
         enclosure_queue.put(ip_addr)
-    
 
-    # Wait for all tasks in the queue to be marked as completed (task_done)
+    # Attente que toutes les tâches dans la file soient marquées comme complétées (task_done)
     enclosure_queue.join()
     while not enclosure_queue.empty():
         result = enclosure_queue.get()
-        print(result) 
+        print(result)
     finish = time.perf_counter()
     
-    print("*** Script complete")
+    print("*** Script complet")
     #Sortie
     print(ip_adrrs_file)
     print("*** Export CSV ***")
