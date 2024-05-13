@@ -45,6 +45,3 @@ Les contributions à ce projet sont les bienvenues. Vous pouvez contribuer en:
 - Proposant des améliorations via des issues.
 - Soumettant des pull requests avec des améliorations ou corrections.
 
-## Licence
-
-Ce projet est distribué sous licence MIT. Veuillez voir le fichier LICENSE pour plus de détails.
